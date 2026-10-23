@@ -1,0 +1,86 @@
+name: daily-digest
+
+# 每日漏洞日报：NVD + CISA KEV → 生成 digest → 提交仓库 → 发 Release（可被 Watch/RSS 订阅）→ 可选 IM 推送
+# 手动触发：gh workflow run daily-digest.yml，或 Actions 页面 Run workflow
+on:
+  schedule:
+    - cron: "0 1 * * *" # UTC 01:00 = 北京时间 09:00（GitHub 定时可能有几分钟延迟）
+  workflow_dispatch:
+
+concurrency:
+  group: daily-digest
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      NVD_API_KEY: ${{ secrets.NVD_API_KEY }} # 可选；匿名也能跑，只是限速更严
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: 生成日报
+        id: gen
+        run: |
+          python3 scripts/generate_daily_digest.py --summary-out /tmp/push-summary.txt 2>&1 | tee /tmp/gen.log
+          count=$(sed -n 's/^COUNT: //p' /tmp/gen.log | tail -1)
+          date=$(sed -n 's/^DATE: //p' /tmp/gen.log | tail -1)
+          echo "count=${count:-0}" >> "$GITHUB_OUTPUT"
+          echo "date=${date:-$(date -u +%F)}" >> "$GITHUB_OUTPUT"
+
+      - name: 提交日报
+        if: steps.gen.outputs.count != '0'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add digests/daily/
+          git commit -m "digest: 自动日报 ${{ steps.gen.outputs.date }}" || echo "no changes to commit"
+          git push
+
+      - name: 发布 Release
+        if: steps.gen.outputs.count != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="daily-${{ steps.gen.outputs.date }}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "release $TAG 已存在，跳过"
+          else
+            gh release create "$TAG" \
+              --title "漏洞日报 ${{ steps.gen.outputs.date }}" \
+              --notes-file "digests/daily/${{ steps.gen.outputs.date }}.md" \
+              --latest
+          fi
+
+      - name: 组装推送文案
+        if: steps.gen.outputs.count != '0'
+        run: |
+          printf '\n完整日报: https://github.com/%s/releases/tag/daily-%s\n' \
+            "${{ github.repository }}" "${{ steps.gen.outputs.date }}" >> /tmp/push-summary.txt
+
+      # 推送渠道按需开启：在仓库 Settings → Secrets and variables → Actions 添加对应 secret 即自动生效
+      - name: 推送到飞书群机器人
+        if: steps.gen.outputs.count != '0'
+        env:
+          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+        run: |
+          if [ -z "$FEISHU_WEBHOOK_URL" ]; then echo "未配置 FEISHU_WEBHOOK_URL，跳过"; exit 0; fi
+          payload=$(jq -n --arg text "$(cat /tmp/push-summary.txt)" '{"msg_type":"text","content":{"text":$text}}')
+          curl -sS -m 15 -X POST "$FEISHU_WEBHOOK_URL" \
+            -H 'Content-Type: application/json' -d "$payload"
+
+      - name: 推送到 Telegram
+        if: steps.gen.outputs.count != '0'
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then echo "未配置 Telegram secrets，跳过"; exit 0; fi
+          curl -sS -m 15 "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/sendMessage" \
+            --data-urlencode "chat_id=$TELEGRAM_CHAT_ID" \
+            --data-urlencode "text=$(cat /tmp/push-summary.txt)"

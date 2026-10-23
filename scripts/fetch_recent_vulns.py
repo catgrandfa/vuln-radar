@@ -9,6 +9,7 @@ https://nvd.nist.gov/developers/request-an-api-key）。
     python3 fetch_recent_vulns.py --days 7                 # 默认查全部语言关键词
     python3 fetch_recent_vulns.py --days 7 --lang go php   # 只查指定语言
     python3 fetch_recent_vulns.py --days 7 --keyword spring --keyword tomcat
+    python3 fetch_recent_vulns.py --days 1 --min-score 7 --format json --output out.json
 
 输出按 CVSS 评分降序，跨关键词去重。
 """
@@ -90,6 +91,9 @@ def main():
     ap.add_argument("--lang", nargs="*", choices=sorted(LANG_KEYWORDS), help="只查这些语言（默认全部）")
     ap.add_argument("--keyword", action="append", default=[], help="追加自定义关键词，可多次")
     ap.add_argument("--sleep", type=float, default=7.0, help="请求间隔秒数（匿名限速建议 >= 6.5）")
+    ap.add_argument("--min-score", type=float, default=0.0, help="只保留 CVSS >= 该分数的条目（默认 0 全保留）")
+    ap.add_argument("--format", choices=("text", "json"), default="text", help="输出格式：text 人读 / json 机器读")
+    ap.add_argument("--output", help="写入文件而不是 stdout")
     args = ap.parse_args()
 
     keywords = []
@@ -101,24 +105,43 @@ def main():
 
     api_key = os.environ.get("NVD_API_KEY")
     seen = set()
+    rows = []
     for kw in keywords:
-        print(f"\n== NVD 最近 {args.days} 天 · 关键词: {kw} ==")
+        if args.format == "text":
+            print(f"\n== NVD 最近 {args.days} 天 · 关键词: {kw} ==")
         try:
-            rows = [summarize(c) for c in fetch_keyword(kw, args.days, api_key)]
+            items = [summarize(c) for c in fetch_keyword(kw, args.days, api_key)]
         except Exception as exc:
-            print(f"  请求失败: {exc}")
+            print(f"  请求失败: {exc}", file=sys.stderr)
             time.sleep(args.sleep)
             continue
-        for r in sorted(rows, key=lambda x: (x["score"] is None, -(x["score"] or 0))):
+        for r in sorted(items, key=lambda x: (x["score"] is None, -(x["score"] or 0))):
             if r["id"] in seen:
                 continue
             seen.add(r["id"])
-            score = f"{r['score']:.1f}" if r["score"] is not None else " - "
-            print(f"[{score:>4} {r['severity'] or '-':<8}] {r['id']} ({r['published']})")
-            print(f"    {r['desc']}")
-            print(f"    https://nvd.nist.gov/vuln/detail/{r['id']}")
+            r["keyword"] = kw
+            rows.append(r)
         if kw != keywords[-1]:
             time.sleep(args.sleep)
+
+    rows = [r for r in rows if (r["score"] or 0) >= args.min_score]
+
+    out = sys.stdout
+    if args.output:
+        out = open(args.output, "w", encoding="utf-8")
+    try:
+        if args.format == "json":
+            json.dump(rows, out, ensure_ascii=False, indent=2)
+            out.write("\n")
+        else:
+            for r in rows:
+                score = f"{r['score']:.1f}" if r["score"] is not None else " - "
+                print(f"[{score:>4} {r['severity'] or '-':<8}] {r['id']} ({r['published']}) [{r['keyword']}]", file=out)
+                print(f"    {r['desc']}", file=out)
+                print(f"    https://nvd.nist.gov/vuln/detail/{r['id']}", file=out)
+    finally:
+        if args.output:
+            out.close()
     return 0
 
 
