@@ -27,7 +27,7 @@ jobs:
       - name: 生成日报
         id: gen
         run: |
-          python3 scripts/generate_daily_digest.py --summary-out /tmp/push-summary.txt 2>&1 | tee /tmp/gen.log
+          python3 scripts/generate_daily_digest.py --summary-out /tmp/push-summary.txt --json-out /tmp/daily.json 2>&1 | tee /tmp/gen.log
           count=$(sed -n 's/^COUNT: //p' /tmp/gen.log | tail -1)
           date=$(sed -n 's/^DATE: //p' /tmp/gen.log | tail -1)
           echo "count=${count:-0}" >> "$GITHUB_OUTPUT"
@@ -62,6 +62,18 @@ jobs:
         run: |
           printf '\n完整日报: https://github.com/%s/releases/tag/daily-%s\n' \
             "${{ github.repository }}" "${{ steps.gen.outputs.date }}" >> /tmp/push-summary.txt
+
+      - name: 推送到订阅服务（第四层 Worker ingest）
+        if: steps.gen.outputs.count != '0'
+        env:
+          WORKER_URL: ${{ secrets.WORKER_URL }}
+          INGEST_TOKEN: ${{ secrets.INGEST_TOKEN }}
+        run: |
+          if [ -z "$WORKER_URL" ] || [ -z "$INGEST_TOKEN" ]; then echo "未配置 WORKER_URL / INGEST_TOKEN，跳过订阅服务推送"; exit 0; fi
+          curl -sS -m 30 -X POST "$WORKER_URL/api/ingest" \
+            -H "X-Ingest-Token: $INGEST_TOKEN" \
+            -H 'Content-Type: application/json' \
+            --data-binary @/tmp/daily.json
 
       # 推送渠道按需开启：在仓库 Settings → Secrets and variables → Actions 添加对应 secret 即自动生效
       - name: 推送到飞书群机器人

@@ -40,12 +40,35 @@ Optional: set `NVD_API_KEY` in the environment (or as a repo secret in CI) with 
 
 `.github/workflows/daily-digest.yml` runs daily: fetch NVD (per-language keywords) + CISA KEV → render `digests/daily/<date>.md` → commit → publish a GitHub Release → optionally push to Feishu/Telegram if secrets are configured. Zero servers; GitHub Actions is free for public repos.
 
+## Multi-user subscription service (Level 4)
+
+`worker/` is a **Cloudflare Worker + D1** self-service — zero npm deps, runs inside the free tier:
+
+- Open the site, pick languages / custom keywords / CVSS threshold / KEV toggle, and create a **subscription bundle** — no account needed; the management link is the credential;
+- Each bundle gets a personal RSS feed (`/feed/<token>.xml`, filtered to your subscription) plus optional Feishu / Telegram push;
+- Every day, GitHub Actions POSTs the fresh digest data to `/api/ingest`; the worker filters per bundle and fans out pushes, with delivery history on the manage page;
+- On-demand search at `/api/query?q=&days=&min_score=`.
+
+Deploy (one-time, ~5 min):
+
+```bash
+cd worker
+npx wrangler login
+npx wrangler d1 create vuln-radar              # put the database_id into wrangler.toml
+npx wrangler d1 execute vuln-radar --remote --file=schema.sql
+npx wrangler secret put INGEST_TOKEN           # e.g. output of: openssl rand -hex 24
+npx wrangler deploy
+```
+
+Then add repo secrets `WORKER_URL` (the deployed URL) and `INGEST_TOKEN` (same key), and the next daily run feeds all bundles automatically.
+
 ## Roadmap
 
 - [x] Content subscription (Releases + RSS)
 - [x] Open tooling (CLI, JSON output, English docs)
 - [x] Scheduled automation + IM push
-- [ ] Multi-user self-service: pick your languages/frameworks/packages, manage your own channels, query on demand (serverless-first).
+- [x] Multi-user self-service (account-less bundle model on Cloudflare Workers + D1)
+- [ ] Next: real accounts, package-level subscriptions (npm/PyPI names), email channel, more ecosystems (Rust / .NET)
 
 ## License
 

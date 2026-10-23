@@ -138,6 +138,7 @@ def main():
     ap.add_argument("--min-score", type=float, default=0.0, help="NVD 条目 CVSS 下限（默认 0）")
     ap.add_argument("--out", help="日报输出路径（默认 digests/daily/<UTC今日>.md，相对仓库根）")
     ap.add_argument("--summary-out", help="推送摘要输出路径（可选）")
+    ap.add_argument("--json-out", help="结构化数据输出路径（可选）：{date, nvd, kev}，供订阅服务 ingest")
     args = ap.parse_args()
 
     date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -150,6 +151,13 @@ def main():
     if args.summary_out:
         with open(args.summary_out, "w", encoding="utf-8") as f:
             f.write(render_summary(date_str, nvd_rows, kev_rows))
+    if args.json_out:
+        kev_slim = [
+            {k: v.get(k) for k in ("cveID", "vendorProject", "product", "vulnerabilityName", "dateAdded", "knownRansomwareCampaignUse")}
+            for v in kev_rows
+        ]
+        with open(args.json_out, "w", encoding="utf-8") as f:
+            json.dump({"date": date_str, "nvd": nvd_rows, "kev": kev_slim}, f, ensure_ascii=False)
 
     print(f"日报已写入 {out_path}")
     print(f"DATE: {date_str}")

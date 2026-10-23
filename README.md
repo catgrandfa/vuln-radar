@@ -23,8 +23,9 @@ platforms/         平台层漏洞（Linux 发行版、容器/K8s、Windows、�
 templates/         漏洞调研笔记模板
 scripts/
   fetch_recent_vulns.py     CLI：从 NVD 拉取近期漏洞（仅标准库）
-  generate_daily_digest.py  日报生成器：NVD + CISA KEV → Markdown
+  generate_daily_digest.py  日报生成器：NVD + CISA KEV → Markdown / JSON
 .github/workflows/ 定时任务（daily-digest）
+worker/            第四层订阅服务：Cloudflare Worker + D1（零 npm 依赖）
 SOURCES.md         订阅源总清单：官方公告 / 漏洞数据库 / 研究博客 / 审计工具
 ```
 
@@ -70,12 +71,40 @@ python3 scripts/fetch_recent_vulns.py --days 3 --keyword tomcat --keyword struts
 2. 值得深入调研的漏洞，复制 `templates/vuln-note.md` 到对应语言目录，命名 `YYYY-MM-短名.md`，逐项填写；
 3. 需要沉淀阶段总结时，整理人工周报 `digests/YYYY-Www.md`（文件名用 ISO 周）。
 
+## 多用户订阅服务（第四层）
+
+`worker/` 是一个 **Cloudflare Worker + D1** 的自助订阅服务，零 npm 依赖，免费额度内可运行（10 万请求/天）：
+
+- 打开服务首页，自选语言 / 自定义关键词 / CVSS 下限 / 是否含 KEV，创建「订阅包」——**无需注册账号，管理链接即凭证**；
+- 每个订阅包获得：个人 RSS（`/feed/<token>.xml`，按订阅过滤）+ 可选的飞书 / Telegram 个人推送；
+- GitHub Actions 每天生成日报后，把当天数据 POST 到 `/api/ingest`，服务按订阅包过滤并扇出推送，投递结果记录在管理页；
+- 首页还提供按需查询（`/api/query?q=&days=&min_score=`，检索已入库数据）。
+
+数据管道分工：Actions 负责采集（NVD 限速与 KEV 大文件的脏活），Worker 只做存储 / 过滤 / 推送，规避免费档 CPU 与子请求限制。
+
+### 部署（一次性，约 5 分钟）
+
+```bash
+cd worker
+npx wrangler login                                          # 浏览器授权你的 Cloudflare 账号
+npx wrangler d1 create vuln-radar                           # 把输出中的 database_id 填进 wrangler.toml
+npx wrangler d1 execute vuln-radar --remote --file=schema.sql
+openssl rand -hex 24                                        # 生成一个 ingest 密钥
+npx wrangler secret put INGEST_TOKEN                        # 粘贴上面的密钥
+npx wrangler deploy                                         # 得到 https://vuln-radar.<你的子域>.workers.dev
+```
+
+然后在 **GitHub 仓库** Settings → Secrets → Actions 添加：`WORKER_URL`（Worker 完整地址）、`INGEST_TOKEN`（同一密钥）。下一次日报运行（北京 09:00）起，会自动把数据推给所有订阅包。
+
+本地开发：`cd worker && npx wrangler d1 execute vuln-radar --local --file=schema.sql && npx wrangler dev`（`worker/.dev.vars` 提供本地 `INGEST_TOKEN`）。
+
 ## 路线图
 
 - [x] 第一层：内容订阅——日报 Release + RSS feed
 - [x] 第二层：工具开放——CLI 参数化 + JSON 输出 + 英文文档
 - [x] 第三层：主动推送——定时自动化 + 飞书 / Telegram webhook（全部免费、零服务器）
-- [ ] 第四层：多用户自助服务——网页上自选语言 / 框架 / 依赖包，管理个人订阅渠道，按需查询。届时演进为常驻服务（优先考虑无服务器形态，如 Cloudflare Workers / Vercel + 托管数据库）。
+- [x] 第四层：多用户自助服务——无账号「订阅包」模型（Cloudflare Worker + D1）
+- [ ] 演进：正式账号体系、按依赖包（npm/PyPI 包名）精确订阅、邮件渠道、更多生态（Rust / .NET 等）
 
 ## 说明
 

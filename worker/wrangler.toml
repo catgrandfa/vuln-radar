@@ -1,0 +1,11 @@
+name = "vuln-radar"
+main = "src/index.js"
+compatibility_date = "2026-01-01"
+
+# 本地开发无需真实 id：`npx wrangler dev` 直接可用。
+# 部署前：`npx wrangler d1 create vuln-radar`，把返回的 database_id 填到下面，
+# 再执行 `npx wrangler d1 execute vuln-radar --remote --file=schema.sql`。
+[[d1_databases]]
+binding = "DB"
+database_name = "vuln-radar"
+database_id = "local-dev-placeholder"
